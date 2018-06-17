@@ -7,45 +7,38 @@ import queue
 
 
 
-class ArloSensorsThread(Thread):
-    def __init__(self, stopEvent, arlo, cam, mqttClient):
-        Thread.__init__(self,name="ArloSensors")
-        self.stopped = stopEvent
-        self.arlo = arlo
-        self.cam = cam
+class ArloSensors:
+    def __init__(self, mqttClient):
         self.mqttClient = mqttClient
         self.airquality = 0.0
         self.temperature = 0.0
         self.humidity = 0.0
     
-    def run(self):
-        print("ARLO sensors thread started")
-        while not self.stopped.wait(1.0):            
-            try:
-                print("reading sensors...")
-                sensor_config = self.arlo.GetSensorConfig(self.cam)
-                data = sensor_config['properties']
-                temperature = data['temperature']['value'] / data['temperature']['scalingFactor']
-                humidity = data['humidity']['value'] / data['humidity']['scalingFactor']
-                airquality = data['airQuality']['value'] / data['airQuality']['scalingFactor']
-                
-                
+    def readSensors(self, arlo, cam):
+        try:
+            print("reading sensors...")
+            sensor_config = arlo.GetSensorConfig(cam)
+            data = sensor_config['properties']
+            temperature = data['temperature']['value'] / data['temperature']['scalingFactor']
+            humidity = data['humidity']['value'] / data['humidity']['scalingFactor']
+            airquality = data['airQuality']['value'] / data['airQuality']['scalingFactor']
 
-                if abs(self.temperature - temperature) > 0.1:
-                    self.mqttClient.publish("arlo/" + self.cam["uniqueId"] + "/sensors/temperature" , temperature, retain=True)
-                if abs(self.humidity - humidity) > 0.1:
-                    self.mqttClient.publish("arlo/" + self.cam["uniqueId"] + "/sensors/humidity" , humidity, retain=True)
-                if abs(self.airquality - airquality) > 0.1:
-                    self.mqttClient.publish("arlo/" + self.cam["uniqueId"] + "/sensors/airquality" , airquality, retain=True)
 
-                self.temperature = temperature
-                self.humidity = humidity
-                self.airquality = airquality
-                print( "Temperature:" , self.temperature , "Humidity:" , self.humidity, "air quality:" , self.airquality)
 
-            except Exception as e:
-                print("Reading ARLO sensors failed with" , e )
-        print("ARLO sensors thread stopped")
+            if abs(self.temperature - temperature) > 0.1:
+                self.mqttClient.publish("arlo/" + cam["uniqueId"] + "/sensors/temperature" , temperature, retain=True)
+            if abs(self.humidity - humidity) > 0.1:
+                self.mqttClient.publish("arlo/" + cam["uniqueId"] + "/sensors/humidity" , humidity, retain=True)
+            if abs(self.airquality - airquality) > 0.1:
+                self.mqttClient.publish("arlo/" + cam["uniqueId"] + "/sensors/airquality" , airquality, retain=True)
+
+            self.temperature = temperature
+            self.humidity = humidity
+            self.airquality = airquality
+            print( "Temperature:" , self.temperature , "Humidity:" , self.humidity, "air quality:" , self.airquality)
+
+        except Exception as e:
+            print("Reading ARLO sensors failed with" , e )
 
 
 
@@ -100,16 +93,17 @@ try:
 
     arlo.SetTempUnit(cameras[0]["uniqueId"], "C")
 
-    arloSensorThread = ArloSensorsThread(stopEvent, arlo, cameras[0], client)
-    arloSensorThread.start()
+    sensors = ArloSensors(client)
+
 except Exception as e:
     print("ARLO inititialization failed with" , e)
     quit(1)
 
 while True:
     try:
-        arlo.HandleEvents(cameras[0], onArloEvent)
+        arlo.HandleEvents(cameras[0], onArloEvent, timeout=2.0)
     except queue.Empty as e:
+        sensors.readSensors(arlo, cameras[0])
         print('Timeout waiting for events')
         continue
     except Exception as e:
