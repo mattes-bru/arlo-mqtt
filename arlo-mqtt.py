@@ -3,6 +3,7 @@ from Arlo import Arlo
 from threading import Thread, Event
 import os
 import queue
+import json
 
 
 
@@ -16,26 +17,38 @@ class ArloSensors:
     
     def readSensors(self, arlo, cam):
         try:
-            print("reading sensors...")
+            print("reading sensors...", end=' ')
             sensor_config = arlo.GetSensorConfig(cam)
             data = sensor_config['properties']
             temperature = data['temperature']['value'] / data['temperature']['scalingFactor']
             humidity = data['humidity']['value'] / data['humidity']['scalingFactor']
             airquality = data['airQuality']['value'] / data['airQuality']['scalingFactor']
 
+            print('done (T: {}, H: {}, A: {})'.format(temperature,humidity,airquality))
 
+            # if abs(self.temperature - temperature) > 0.1:
+            #     self.mqttClient.publish("arlo/" + cam["uniqueId"] + "/sensors/temperature" , temperature, retain=True)
+            # if abs(self.humidity - humidity) > 0.1:
+            #     self.mqttClient.publish("arlo/" + cam["uniqueId"] + "/sensors/humidity" , humidity, retain=True)
+            # if abs(self.airquality - airquality) > 0.1:
+            #     self.mqttClient.publish("arlo/" + cam["uniqueId"] + "/sensors/airquality" , airquality, retain=True)
 
-            if abs(self.temperature - temperature) > 0.1:
-                self.mqttClient.publish("arlo/" + cam["uniqueId"] + "/sensors/temperature" , temperature, retain=True)
-            if abs(self.humidity - humidity) > 0.1:
-                self.mqttClient.publish("arlo/" + cam["uniqueId"] + "/sensors/humidity" , humidity, retain=True)
-            if abs(self.airquality - airquality) > 0.1:
-                self.mqttClient.publish("arlo/" + cam["uniqueId"] + "/sensors/airquality" , airquality, retain=True)
+            if abs(self.airquality - airquality) > 0.1 or abs(self.humidity - humidity) > 0.1 or abs(self.temperature - temperature) > 0.1:
+                print('sending sensor data update...', end=' ')
+                payload = {
+                    'temperature': temperature,
+                    'humidity': humidity,
+                    'airquality': airquality
+                }
+                self.mqttClient.publish("arlo/" + cam["uniqueId"] + "/sensors/environmental" , json.dumps(payload), retain=True)
+                print('done')
 
             self.temperature = temperature
             self.humidity = humidity
             self.airquality = airquality
-            print( "Temperature:" , self.temperature , "Humidity:" , self.humidity, "air quality:" , self.airquality)
+
+
+
 
         except Exception as e:
             print("Reading ARLO sensors failed with" , e )
@@ -49,9 +62,10 @@ def onMQTTConnected(client, userdata, flags, rc):
 
 def onArloEvent(arlo, event):
     try:
-        if "ambientSensors" in event['resource']:
-            # Ambient Sensors will be handled elsewhere 
-            return
+        if 'resource' in event:
+            if "ambientSensors" in event['resource']:
+                # Ambient Sensors will be handled elsewhere
+                return
         # if 'properties' in event:
         #     if 'batteryLevel'
             
@@ -94,6 +108,7 @@ try:
     arlo.SetTempUnit(cameras[0]["uniqueId"], "C")
 
     sensors = ArloSensors(client)
+    sensors.readSensors(arlo, cameras[0])
 
 except Exception as e:
     print("ARLO inititialization failed with" , e)
@@ -101,13 +116,17 @@ except Exception as e:
 
 while True:
     try:
-        arlo.HandleEvents(cameras[0], onArloEvent, timeout=2.0)
+        print('Listen for ARLO events...', end=' ')
+        arlo.HandleEvents(cameras[0], onArloEvent, timeout=60.0)
     except queue.Empty as e:
+        print("done")
         sensors.readSensors(arlo, cameras[0])
-        print('Timeout waiting for events')
+        # Reset ARLO
+        arlo = Arlo(arlo_user, arlo_password)
+        cameras = arlo.GetDevices('camera')
         continue
     except Exception as e:
-        print('Exception in handle Arlo events:', repr(e))
+        print('failed (', repr(e) , ')')
         break
 
     
