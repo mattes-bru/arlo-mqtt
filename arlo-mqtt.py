@@ -61,14 +61,49 @@ def onMQTTConnected(client, userdata, flags, rc):
 
 
 def onArloEvent(arlo, event):
+    global isCharging
+    global batteryLevel
+    global client
+    global cameras
     try:
         if 'resource' in event:
             if "ambientSensors" in event['resource']:
                 # Ambient Sensors will be handled elsewhere
                 return
-        # if 'properties' in event:
-        #     if 'batteryLevel'
-            
+        if 'properties' in event:
+            if 'batteryLevel' in event['properties']:
+                val = event['properties']['batteryLevel']
+                if val < batteryLevel:
+                    if isCharging:
+                        client.publish("arlo/" + cameras[0]["uniqueId"] + "/status/charging", json.dumps(False), retain=True)
+                        isCharging = False
+                else:
+                    if not isCharging:
+                        client.publish("arlo/" + cameras[0]["uniqueId"] + "/status/charging", json.dumps(True), retain=True)
+                        isCharging = True
+
+                batteryLevel = val
+                client.publish("arlo/" + cameras[0]["uniqueId"] + "/status/batteryLevel", json.dumps(batteryLevel), retain=True)
+                return
+            if 'audioDetected' in event['properties']:
+                alertState = event['properties']['audioDetected']
+                if alertState:
+                    client.publish("arlo/" + cameras[0]["uniqueId"] + "/alert/audio", json.dumps(1), retain=True)
+                else:
+                    client.publish("arlo/" + cameras[0]["uniqueId"] + "/alert/audio", json.dumps(0), retain=True)
+                return
+            if 'motionDetected' in event['properties']:
+                alertState = event['properties']['motionDetected']
+                if alertState:
+                    client.publish("arlo/" + cameras[0]["uniqueId"] + "/alert/motion", json.dumps(1), retain=True)
+                else:
+                    client.publish("arlo/" + cameras[0]["uniqueId"] + "/alert/motion", json.dumps(0), retain=True)
+                return
+            if 'signalStrength' in event['properties']:
+                signalStrength = event['properties']['signalStrength']
+                client.publish("arlo/" + cameras[0]["uniqueId"] + "/status/signalStrength", json.dumps(signalStrength), retain=True)
+                return
+
         print ("==== Callback =======")
         print(event)
     except Exception as e:
@@ -76,7 +111,8 @@ def onArloEvent(arlo, event):
 
 
 
-
+isCharging = True
+batteryLevel = 100  # type: int
 
 mqtt_host = os.environ.get("MQTT_SERVER")
 if not mqtt_host:
@@ -89,7 +125,6 @@ client.connect(mqtt_host)
 
 client.loop_start()
 
-stopEvent = Event()
 
 
 arlo_user = os.environ.get("ARLO_USER")
@@ -103,12 +138,26 @@ if not arlo_password:
 try:    
     arlo = Arlo(arlo_user, arlo_password)
     
-    cameras = arlo.GetDevices('camera') 
+    cameras = arlo.GetDevices('camera')
+    arloBaby = None
 
-    arlo.SetTempUnit(cameras[0]["uniqueId"], "C")
+    print(cameras[0])
+
+    for cam in cameras:
+        if 'modelId' in cam:
+            if cam['modelId'] == 'ABC1000':
+                arloBaby = cam
+                print("Found ArloBaby!")
+                break
+    
+    if arloBaby is None:
+        print("ArloBaby not connected!")
+        quit(1)
+
+    arlo.SetTempUnit(arloBaby["uniqueId"], "C")
 
     sensors = ArloSensors(client)
-    sensors.readSensors(arlo, cameras[0])
+    sensors.readSensors(arlo, arloBaby)
 
 except Exception as e:
     print("ARLO inititialization failed with" , e)
@@ -117,20 +166,19 @@ except Exception as e:
 while True:
     try:
         print('Listen for ARLO events...', end=' ')
-        arlo.HandleEvents(cameras[0], onArloEvent, timeout=60.0)
+        arlo.HandleEvents(arloBaby, onArloEvent, timeout=60.0)
     except queue.Empty as e:
         print("done")
-        sensors.readSensors(arlo, cameras[0])
+        sensors.readSensors(arlo, arloBaby)
         # Reset ARLO
-        arlo = Arlo(arlo_user, arlo_password)
-        cameras = arlo.GetDevices('camera')
+        # arlo = Arlo(arlo_user, arlo_password)
+        # cameras = arlo.GetDevices('camera')
         continue
     except Exception as e:
         print('failed (', repr(e) , ')')
         break
 
-    
-stopEvent.set()
+
 
     
 
